@@ -1,29 +1,46 @@
 
 import React, { useMemo, useState } from 'react';
-import { AreaChart, Area, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { Cell, PieChart, Pie, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { useFinancialCalculations } from '../utils/calculations';
-import { getTodayArgentinaDate, calculateFinancialsForDate, daysBetween } from '../utils/financials';
+import { getTodayArgentinaDate, calculateFinancialsForDate } from '../utils/financials';
 import { Currency } from '../types';
 import type { AppSettings } from '../types';
 import HelpTooltip from './HelpTooltip';
 import MaturitiesWaterfallChart from './MaturitiesWaterfallChart';
+import LiquidityGapChart from './LiquidityGapChart';
 import HistoricalEvolutionChart from './HistoricalEvolutionChart';
 import { useAppContext } from '../App';
 import { ArrowsUpDownIcon } from './Icons';
 
-const KpiCard: React.FC<{ title: string; value: string; helpText: string; colorClass?: string; secondaryValue?: string }> = ({ title, value, helpText, colorClass = 'text-gray-800 dark:text-gray-100', secondaryValue }) => (
-    <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-sm border dark:border-gray-700 transition-all duration-300">
-        <h3 className="text-sm font-semibold text-gray-600 dark:text-gray-300 flex items-center gap-2">
+const KpiCard: React.FC<{ 
+    title: string; 
+    value: string; 
+    baseValue?: string;
+    helpText: string; 
+    colorClass?: string; 
+    isStressed?: boolean 
+}> = ({ title, value, baseValue, helpText, colorClass = 'text-gray-800 dark:text-gray-100', isStressed }) => (
+    <div className={`p-4 rounded-lg shadow-sm border transition-all duration-300 ${isStressed ? 'bg-primary/5 border-primary/30 dark:bg-accent-dm/5 dark:border-accent-dm/30' : 'bg-white dark:bg-gray-800 dark:border-gray-700'}`}>
+        <h3 className="text-[10px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400 flex items-center gap-2">
             {title} <HelpTooltip text={helpText} />
         </h3>
-        <p className={`text-2xl lg:text-3xl font-bold mt-2 ${colorClass}`}>{value}</p>
-        {secondaryValue && <p className="text-xs text-gray-500 mt-1">{secondaryValue}</p>}
+        <div className="mt-2">
+            {baseValue && isStressed ? (
+                <div className="flex flex-col">
+                    <p className="text-xs text-gray-400 line-through">{baseValue}</p>
+                    <p className={`text-xl lg:text-2xl font-bold ${colorClass}`}>{value}</p>
+                </div>
+            ) : (
+                <p className={`text-xl lg:text-2xl font-bold ${colorClass}`}>{value}</p>
+            )}
+        </div>
+        {isStressed && <div className="mt-1 inline-block px-1.5 py-0.5 bg-primary/10 dark:bg-accent-dm/10 text-[9px] font-black text-primary dark:text-accent-dm rounded">ESC. SIMULADO</div>}
     </div>
 );
 
 const Widget: React.FC<{title: string, children: React.ReactNode, className?: string}> = ({title, children, className=""}) => (
     <div className={`bg-white dark:bg-gray-800 p-4 rounded-lg shadow-sm border dark:border-gray-700 ${className}`}>
-        <h3 className="text-xl font-semibold text-gray-700 dark:text-gray-200 mb-4">{title}</h3>
+        <h3 className="text-lg font-bold text-gray-700 dark:text-gray-200 mb-4">{title}</h3>
         {children}
     </div>
 );
@@ -36,13 +53,13 @@ const BreakdownPieChart: React.FC<{ data: { name: string, value: number }[], app
         return <div className="flex items-center justify-center h-full text-gray-500">Sin datos</div>;
     }
     return (
-        <ResponsiveContainer width="100%" height={250}>
+        <ResponsiveContainer width="100%" height={220}>
             <PieChart>
                 <Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={2}>
                     {data.map((entry, index) => <Cell key={`cell-${index}`} fill={PIE_PALETTE[index % PIE_PALETTE.length]} />)}
                 </Pie>
                 <Tooltip formatter={(value: number) => `USD ${value.toLocaleString('es-AR', { maximumFractionDigits: 0 })}`} />
-                <Legend iconSize={10} wrapperStyle={{ fontSize: '12px', color: isDarkMode ? '#9ca3af' : '#4b5563' }} />
+                <Legend iconSize={8} wrapperStyle={{ fontSize: '11px', color: isDarkMode ? '#9ca3af' : '#4b5563' }} />
             </PieChart>
         </ResponsiveContainer>
     );
@@ -51,111 +68,104 @@ const BreakdownPieChart: React.FC<{ data: { name: string, value: number }[], app
 const GlobalDashboard: React.FC = () => {
     const { state } = useAppContext();
     const { exchangeRates, marketPriceHistory } = state;
-    const { companyDebts, companyInvestments, investmentGroups, banks, latestRate, appSettings, companyDebtCalculations } = useFinancialCalculations();
+    const { companyDebts, investmentGroups, banks, latestRate, appSettings, companyDebtCalculations, companyInvestments, companyGrainCollections } = useFinancialCalculations();
     const today = useMemo(() => getTodayArgentinaDate(), []);
 
-    // --- FASE 4: Stress Test Logic ---
-    const [fxShift, setFxShift] = useState(0); // Porcentaje de variación del TC
+    const [fxShift, setFxShift] = useState(0); 
+    const isStressed = fxShift !== 0;
     const effectiveRate = useMemo(() => latestRate * (1 + fxShift / 100), [latestRate, fxShift]);
 
-    const { netPosition, totalDebtUSD, totalInvestmentUSD, weightedCft, availableCredit } = useMemo(() => {
+    // Función de cálculo reutilizable para ambos escenarios
+    const calculateStats = (rate: number) => {
         let totalDebtStockUSD = 0;
-        let totalWeightedCftNumerator = 0;
-        let totalPrincipalUSD_for_cft = 0;
-        
         companyDebts.forEach(debt => {
             const calcs = companyDebtCalculations.get(debt.id);
             if (!calcs) return;
-
-            const { financials, usdAnalysis } = calcs;
             const principalNative = debt.calculationMode === 'futureValue' ? (debt.netAmountReceived || 0) : debt.amount;
-            const accruedInterestNative = financials.accruedInterest;
-            
-            // Usar effectiveRate (simulado) para deudas en ARS
-            totalDebtStockUSD += (debt.currency === Currency.USD)
-                ? principalNative + accruedInterestNative
-                : (principalNative + accruedInterestNative) / effectiveRate;
-
-            const principalForRateWeightingUSD = debt.currency === Currency.USD ? principalNative : principalNative / debt.exchangeRateAtOrigination;
-            let cftInUsd: number | null = (debt.currency === Currency.USD) ? financials.cft : usdAnalysis?.usd_cft ?? null;
-
-            if (cftInUsd !== null && isFinite(cftInUsd) && principalForRateWeightingUSD > 0) {
-                totalWeightedCftNumerator += cftInUsd * principalForRateWeightingUSD;
-                totalPrincipalUSD_for_cft += principalForRateWeightingUSD;
-            }
+            const accruedInterestNative = calcs.financials.accruedInterest;
+            totalDebtStockUSD += (debt.currency === Currency.USD) ? (principalNative + accruedInterestNative) : (principalNative + accruedInterestNative) / rate;
         });
 
-        // Valor de inversiones (recalculado si son en ARS)
         const totalInvestmentValueUSD = investmentGroups.reduce((sum, group) => {
             return sum + group.holdings.reduce((hSum, h) => {
-                const valNative = h.marketValue;
-                const valUSD = h.currency === Currency.USD ? valNative : valNative / effectiveRate;
+                const valUSD = h.currency === Currency.USD ? h.marketValue : h.marketValue / rate;
                 return hSum + valUSD;
             }, 0);
         }, 0);
-        
+
         const totalCreditLimitUSD = banks.reduce((sum, bank) => {
             return sum + bank.creditLines.reduce((bankSum, line) => {
-                return bankSum + (line.currency === Currency.USD ? line.amount : line.amount / effectiveRate);
+                return bankSum + (line.currency === Currency.USD ? line.amount : line.amount / rate);
             }, 0);
         }, 0);
 
         const totalUsedCreditUSD = companyDebts.reduce((sum, debt) => {
              const principalNative = debt.calculationMode === 'futureValue' ? (debt.netAmountReceived || 0) : debt.amount;
-             return sum + (debt.currency === Currency.USD ? principalNative : principalNative / effectiveRate);
+             return sum + (debt.currency === Currency.USD ? principalNative : principalNative / rate);
         }, 0);
 
         return {
             netPosition: totalInvestmentValueUSD - totalDebtStockUSD,
             totalDebtUSD: totalDebtStockUSD,
             totalInvestmentUSD: totalInvestmentValueUSD,
-            weightedCft: totalPrincipalUSD_for_cft > 0 ? totalWeightedCftNumerator / totalPrincipalUSD_for_cft : 0,
             availableCredit: totalCreditLimitUSD - totalUsedCreditUSD,
         };
-    }, [companyDebts, investmentGroups, banks, effectiveRate, companyDebtCalculations]);
-    
+    };
+
+    const baseStats = useMemo(() => calculateStats(latestRate), [latestRate, companyDebts, investmentGroups, banks, companyDebtCalculations]);
+    const stressedStats = useMemo(() => isStressed ? calculateStats(effectiveRate) : baseStats, [isStressed, effectiveRate, companyDebts, investmentGroups, banks, companyDebtCalculations, baseStats]);
+
     const waterfallData = useMemo(() => {
-        const data: any[] = [{ month: 'Posición Neta Actual', cumulativeNet: netPosition, debt: 0, investment: 0, net: 0 }];
-        let runningBalance = netPosition;
+        const data: any[] = [{ month: 'Posición Neta Actual', cumulativeNet: stressedStats.netPosition, debt: 0, investment: 0, net: 0, inflow: 0, outflow: 0 }];
+        let runningBalance = stressedStats.netPosition;
 
         for (let i = 0; i < 6; i++) {
             const targetMonth = new Date(today);
             targetMonth.setUTCMonth(today.getUTCMonth() + i);
             const monthKey = `${targetMonth.getUTCFullYear()}-${String(targetMonth.getUTCMonth() + 1).padStart(2, '0')}`;
             
+            // Outflows (Deuda)
             let debtMaturities = 0;
             companyDebts.forEach(d => {
                 if (d.dueDate.startsWith(monthKey)) {
                     const financials = companyDebtCalculations.get(d.id)?.financials;
                     if (financials) {
-                        const amountUSD = d.currency === Currency.USD ? financials.totalToRepay : financials.totalToRepay / effectiveRate;
-                        debtMaturities -= amountUSD;
+                        debtMaturities -= d.currency === Currency.USD ? financials.totalToRepay : financials.totalToRepay / effectiveRate;
                     }
                 }
             });
             
+            // Inflows (Inversiones + Granos)
             let investmentMaturities = 0;
             investmentGroups.flatMap(g => g.holdings).forEach(h => {
                 if (h.maturityDate?.startsWith(monthKey)) {
-                    // Simplificación: usamos el valor de mercado actual en USD simulado
-                    const valUSD = h.currency === Currency.USD ? h.marketValue : h.marketValue / effectiveRate;
-                    investmentMaturities += valUSD; 
+                    investmentMaturities += h.currency === Currency.USD ? h.marketValue : h.marketValue / effectiveRate; 
+                }
+            });
+
+            let grainInflows = 0;
+            companyGrainCollections.forEach(c => {
+                if (c.status === 'matched' && (c.actualCollectionDate || c.dueDate).startsWith(monthKey)) {
+                    const netARS = c.finalNetAmount ?? (c.grossAmount * (1 - c.tentativeDeductionPercentage/100));
+                    grainInflows += netARS / effectiveRate;
                 }
             });
             
-            const netFlow = debtMaturities + investmentMaturities;
+            const totalInflow = investmentMaturities + grainInflows;
+            const totalOutflow = Math.abs(debtMaturities);
+            const netFlow = totalInflow - totalOutflow;
             runningBalance += netFlow;
             
             data.push({
                 month: monthKey,
-                debt: debtMaturities,
-                investment: investmentMaturities,
+                inflow: totalInflow,
+                outflow: totalOutflow,
                 net: netFlow,
                 cumulativeNet: runningBalance
             });
         }
         return data;
-    }, [netPosition, companyDebts, investmentGroups, companyDebtCalculations, effectiveRate, today]);
+    }, [stressedStats.netPosition, companyDebts, investmentGroups, companyGrainCollections, companyDebtCalculations, effectiveRate, today]);
     
     const debtBreakdownData = useMemo(() => {
         const byType: Record<string, number> = {};
@@ -167,165 +177,124 @@ const GlobalDashboard: React.FC = () => {
         return Object.entries(byType).map(([name, value]) => ({ name, value }));
     }, [companyDebts, effectiveRate]);
 
-    const investmentBreakdownData = useMemo(() => {
-        return investmentGroups.map(group => {
-             const groupValUSD = group.holdings.reduce((s, h) => {
-                 return s + (h.currency === Currency.USD ? h.marketValue : h.marketValue / effectiveRate);
-             }, 0);
-             return { name: group.groupName, value: groupValUSD };
-        });
-    }, [investmentGroups, effectiveRate]);
-
     const historicalData = useMemo(() => {
-        const data: { date: string; "Deuda Total": number; "Inversiones Totales": number; "Posición Neta": number }[] = [];
-        const rangeInDays = 180;
-
+        const data: any[] = [];
+        const rangeInDays = 90;
         for (let i = rangeInDays; i >= 0; i--) {
             const date = new Date(today);
             date.setUTCDate(today.getUTCDate() - i);
             const dateStr = date.toISOString().split('T')[0];
-            
             const rateForDay = [...exchangeRates].sort((a,b) => b.date.localeCompare(a.date)).find(r => r.date <= dateStr)?.rate || latestRate;
-            const priceSnapshot = [...marketPriceHistory].sort((a,b) => b.date.localeCompare(a.date)).find(s => s.date <= dateStr);
-            const marketPrices = priceSnapshot ? priceSnapshot.prices : {};
-
-            let historicalTotalDebtUSD = 0;
-            companyDebts.forEach(debt => {
-                const originationDate = new Date(debt.originationDate + 'T00:00:00Z');
-                const endDate = new Date((debt.actualCancellationDate || debt.dueDate) + 'T00:00:00Z');
-                
-                if (originationDate <= date && date < endDate) {
-                    const financials = calculateFinancialsForDate(debt, date, appSettings);
-                    const accruedValue = (debt.calculationMode === 'futureValue' ? (debt.netAmountReceived || 0) : debt.amount) + financials.accruedInterest;
-                    const valueUSD = debt.currency === Currency.USD 
-                        ? accruedValue
-                        : accruedValue / rateForDay;
-                    historicalTotalDebtUSD += valueUSD;
-                }
-            });
-
-            let historicalTotalInvestmentUSD = 0;
-            companyInvestments.forEach(inv => {
-                const transactionsUpToDate = inv.transactions.filter(t => new Date(t.date + 'T00:00:00Z') <= date);
-                if (transactionsUpToDate.length === 0) return;
-                
-                const totalQuantity = transactionsUpToDate.reduce((acc, t) => acc + (t.type === 'Compra' ? t.quantity : -t.quantity), 0);
-                if (totalQuantity <= 1e-9) return;
-
-                const purchaseTxs = transactionsUpToDate.filter(t => t.type === 'Compra');
-                const isFixedRate = purchaseTxs.length > 0 && purchaseTxs.every(t => t.isFixedRate);
-
-                let marketValueNative = 0;
-                if (isFixedRate) {
-                     const quantityBought = purchaseTxs.reduce((sum, t) => sum + t.quantity, 0);
-                     const costBasisNative = purchaseTxs.reduce((sum, t) => sum + t.price * t.quantity, 0);
-                     const avgBuyPrice = quantityBought > 0 ? costBasisNative / quantityBought : 0;
-                     const remainingCostBasis = totalQuantity * avgBuyPrice;
-
-                     const accruedInterestOnPurchases = purchaseTxs.reduce((total, t) => {
-                         const elapsedDays = daysBetween(t.date, date);
-                         const principal = t.quantity * t.price;
-                         const accrued = principal * (t.tea || 0) / 100 / appSettings.annualRateBasis * Math.max(0, elapsedDays);
-                         return total + accrued;
-                     }, 0);
-
-                     const proportionRemaining = quantityBought > 0 ? totalQuantity / quantityBought : 0;
-                     const accruedInterestOnRemaining = accruedInterestOnPurchases * proportionRemaining;
-
-                     marketValueNative = remainingCostBasis + accruedInterestOnRemaining;
-                } else {
-                    const marketPrice = marketPrices[inv.instrumentName.toLowerCase()] || 0;
-                    marketValueNative = totalQuantity * marketPrice;
-                }
-
-                const valueUSD = inv.currency === Currency.USD ? marketValueNative : marketValueNative / rateForDay;
-                historicalTotalInvestmentUSD += valueUSD;
-            });
             
-            data.push({
-                date: dateStr,
-                "Deuda Total": historicalTotalDebtUSD,
-                "Inversiones Totales": historicalTotalInvestmentUSD,
-                "Posición Neta": historicalTotalInvestmentUSD - historicalTotalDebtUSD,
+            let hDebt = 0;
+            companyDebts.forEach(debt => {
+                if (debt.originationDate <= dateStr && (debt.actualCancellationDate || debt.dueDate) > dateStr) {
+                    const financials = calculateFinancialsForDate(debt, date, appSettings);
+                    const val = (debt.calculationMode === 'futureValue' ? (debt.netAmountReceived || 0) : debt.amount) + financials.accruedInterest;
+                    hDebt += debt.currency === Currency.USD ? val : val / rateForDay;
+                }
             });
+
+            let hInv = 0;
+            companyInvestments.forEach(inv => {
+                const totalQty = inv.transactions.filter(t => t.date <= dateStr).reduce((acc, t) => acc + (t.type === 'Compra' ? t.quantity : -t.quantity), 0);
+                if (totalQty > 0) {
+                    const price = marketPriceHistory.find(s => s.date <= dateStr)?.prices[inv.instrumentName.toLowerCase()] || 0;
+                    const val = totalQty * price;
+                    hInv += inv.currency === Currency.USD ? val : val / rateForDay;
+                }
+            });
+
+            data.push({ date: dateStr, "Deuda Total": hDebt, "Inversiones Totales": hInv, "Posición Neta": hInv - hDebt });
         }
         return data;
     }, [companyDebts, companyInvestments, exchangeRates, marketPriceHistory, appSettings, latestRate, today]);
-    
-    const isDarkMode = appSettings.theme === 'dark';
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-          <h1 className="text-3xl font-bold text-gray-700 dark:text-gray-200">Dashboard Global</h1>
+      <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 bg-white dark:bg-gray-800 p-4 rounded-xl shadow-sm border dark:border-gray-700">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-700 dark:text-gray-200">Panel de Control Estratégico</h1>
+            <p className="text-xs text-gray-500">Estado consolidado y simulación de escenarios de estrés.</p>
+          </div>
           
-          {/* Panel de Stress Test */}
-          <div className="bg-primary/5 dark:bg-accent-dm/5 border border-primary/20 dark:border-accent-dm/20 p-3 rounded-xl flex flex-col md:flex-row items-center gap-4 shadow-sm w-full md:w-auto">
-              <div className="flex items-center gap-2">
-                  <div className="p-1.5 bg-primary/10 dark:bg-accent-dm/10 rounded-lg text-primary dark:text-accent-dm">
+          {/* Stress Test Control */}
+          <div className="bg-primary/5 dark:bg-accent-dm/5 border border-primary/20 dark:border-accent-dm/20 p-2 px-4 rounded-xl flex items-center gap-6 w-full lg:w-auto">
+              <div className="flex items-center gap-3">
+                  <div className="p-2 bg-primary/10 dark:bg-accent-dm/10 rounded-lg text-primary dark:text-accent-dm">
                     <ArrowsUpDownIcon className="w-5 h-5" />
                   </div>
                   <div>
-                      <p className="text-[10px] uppercase font-bold text-gray-500 dark:text-gray-400 leading-none">Stress Test CCL</p>
-                      <p className="text-sm font-bold text-primary dark:text-accent-dm">${effectiveRate.toLocaleString('es-AR', {minimumFractionDigits: 2})}</p>
+                      <p className="text-[9px] uppercase font-black text-gray-400 leading-none">Stress Test CCL</p>
+                      <p className="text-lg font-black text-primary dark:text-accent-dm">${effectiveRate.toLocaleString('es-AR', {minimumFractionDigits: 2})}</p>
                   </div>
               </div>
-              <div className="flex-grow md:w-48">
+              <div className="flex-grow min-w-[150px]">
                   <input 
-                    type="range" 
-                    min="-20" 
-                    max="100" 
-                    step="5"
-                    value={fxShift} 
+                    type="range" min="-20" max="100" step="5" value={fxShift} 
                     onChange={(e) => setFxShift(Number(e.target.value))}
-                    className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-primary"
+                    className="w-full h-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-primary"
                   />
-                  <div className="flex justify-between text-[10px] font-medium text-gray-400 mt-1">
-                      <span>-20%</span>
-                      <span className={fxShift !== 0 ? 'text-primary dark:text-accent-dm font-bold' : ''}>{fxShift > 0 ? `+${fxShift}%` : `${fxShift}%`}</span>
+                  <div className="flex justify-between text-[9px] font-bold text-gray-400 mt-1 uppercase">
+                      <span>TC Actual</span>
+                      <span className={isStressed ? 'text-primary dark:text-accent-dm scale-110' : ''}>{fxShift > 0 ? `+${fxShift}%` : `${fxShift}%`}</span>
                       <span>+100%</span>
                   </div>
               </div>
-              {fxShift !== 0 && (
-                  <button 
-                    onClick={() => setFxShift(0)}
-                    className="text-[10px] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 px-2 py-1 rounded hover:bg-gray-50 font-bold transition-colors"
-                  >
-                      RESET
-                  </button>
+              {isStressed && (
+                  <button onClick={() => setFxShift(0)} className="text-[10px] bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 px-3 py-1 rounded-md hover:bg-gray-50 font-black transition-all">RESET</button>
               )}
           </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <KpiCard 
             title="Posición Neta" 
-            value={`USD ${netPosition.toLocaleString('es-AR', {maximumFractionDigits:0})}`} 
-            helpText="Inversiones Totales - Deuda Total Devengada. Se recalcula según el escenario de tipo de cambio elegido en el panel de Stress Test." 
-            colorClass={netPosition >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'} 
-            secondaryValue={fxShift !== 0 ? `Escenario: ${fxShift}% TC` : undefined}
+            value={`USD ${stressedStats.netPosition.toLocaleString('es-AR', {maximumFractionDigits:0})}`} 
+            baseValue={isStressed ? `USD ${baseStats.netPosition.toLocaleString('es-AR', {maximumFractionDigits:0})}` : undefined}
+            isStressed={isStressed}
+            helpText="Muestra la solvencia neta de la empresa. En modo Stress Test, recalcula las deudas e inversiones en pesos al nuevo tipo de cambio simulado." 
+            colorClass={stressedStats.netPosition >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'} 
         />
-        <KpiCard title="Deuda Total Devengada" value={`USD ${totalDebtUSD.toLocaleString('es-AR', {maximumFractionDigits:0})}`} helpText="Capital total adeudado más intereses acumulados hasta hoy, valorizado en USD (simulado si se aplicó el Stress Test)." />
-        <KpiCard title="Inversiones Totales" value={`USD ${totalInvestmentUSD.toLocaleString('es-AR', {maximumFractionDigits:0})}`} helpText="Valor de mercado actual de todas las inversiones valorizadas en USD." />
-        <KpiCard title="CFT Ponderado Deuda" value={`${weightedCft.toLocaleString('es-AR', {minimumFractionDigits: 2, maximumFractionDigits: 2})}%`} helpText="Costo Financiero Total promedio de la cartera de deudas, ponderada por el monto de cada operación." />
-        <KpiCard title="Crédito Disponible" value={`USD ${availableCredit.toLocaleString('es-AR', {maximumFractionDigits:0})}`} helpText="Suma de todas las líneas de crédito bancarias menos la deuda utilizada." />
+        <KpiCard 
+            title="Deuda Stock (USD)" 
+            value={`USD ${stressedStats.totalDebtUSD.toLocaleString('es-AR', {maximumFractionDigits:0})}`} 
+            baseValue={isStressed ? `USD ${baseStats.totalDebtUSD.toLocaleString('es-AR', {maximumFractionDigits:0})}` : undefined}
+            isStressed={isStressed}
+            helpText="Capital total adeudado más intereses acumulados. La devaluación reduce el peso de la deuda en pesos cuando se mide en USD." 
+        />
+        <KpiCard 
+            title="Inversiones (USD)" 
+            value={`USD ${stressedStats.totalInvestmentUSD.toLocaleString('es-AR', {maximumFractionDigits:0})}`} 
+            baseValue={isStressed ? `USD ${baseStats.totalInvestmentUSD.toLocaleString('es-AR', {maximumFractionDigits:0})}` : undefined}
+            isStressed={isStressed}
+            helpText="Valor de mercado de la cartera. Si tiene bonos en pesos, una devaluación licuará su valor en dólares." 
+        />
+        <KpiCard 
+            title="Crédito Disponible" 
+            value={`USD ${stressedStats.availableCredit.toLocaleString('es-AR', {maximumFractionDigits:0})}`} 
+            baseValue={isStressed ? `USD ${baseStats.availableCredit.toLocaleString('es-AR', {maximumFractionDigits:0})}` : undefined}
+            isStressed={isStressed}
+            helpText="Poder de fuego financiero restante. Incluye líneas bancarias no utilizadas." 
+            colorClass="text-blue-600 dark:text-blue-400"
+        />
       </div>
       
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <Widget title="Proyección de Flujo de Caja (6 Meses)">
-             <MaturitiesWaterfallChart data={waterfallData} appSettings={appSettings} />
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          <Widget title="Análisis de Brechas (Income vs Expense)" className="lg:col-span-8">
+             <LiquidityGapChart data={waterfallData.filter(d => d.month !== 'Posición Neta Actual')} appSettings={appSettings} />
           </Widget>
-           <Widget title="Evolución Histórica (180 días)">
-             <HistoricalEvolutionChart data={historicalData} appSettings={appSettings} />
+          <Widget title="Estructura de Pasivos" className="lg:col-span-4">
+             <BreakdownPieChart data={debtBreakdownData} appSettings={appSettings} />
           </Widget>
       </div>
 
        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <Widget title="Desglose de Deuda por Tipo">
-             <BreakdownPieChart data={debtBreakdownData} appSettings={appSettings} />
+          <Widget title="Evolución Histórica (90 días)">
+             <HistoricalEvolutionChart data={historicalData} appSettings={appSettings} />
           </Widget>
-           <Widget title="Desglose de Inversiones por Tipo">
-             <BreakdownPieChart data={investmentBreakdownData} appSettings={appSettings} />
+          <Widget title="Proyección de Solvencia (Caja Acumulada)">
+             <MaturitiesWaterfallChart data={waterfallData} appSettings={appSettings} />
           </Widget>
       </div>
     </div>

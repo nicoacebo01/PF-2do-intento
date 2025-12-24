@@ -40,72 +40,65 @@ const AIQueryAssistantModal: React.FC<AIQueryAssistantModalProps> = ({ isOpen, o
     setResponse('');
 
     try {
-      // 1. Inicializar cliente Gemini
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      
-      // 2. Preparar el contexto estructurado para la IA
       const todayStr = new Date().toISOString().split('T')[0];
       
       const dataContext = {
           hoy: todayStr,
           tc_spot_ccl: financialData.exchangeRates?.slice(-1)[0]?.rate || 'Desconocido',
-          curva_futuros: financialData.futureRateHistory?.slice(-1)[0]?.rates?.map((r: any) => ({
-              vencimiento: r.date,
-              tasa: r.rate
-          })).slice(0, 6), // Enviamos los próximos 6 meses
-          resumen_deudas: financialData.debts?.map((d: any) => ({
-              tipo: d.type,
+          curva_futuros: financialData.futureRateHistory?.slice(-1)[0]?.rates?.slice(0, 6),
+          analisis_brechas: financialData.debts?.map((d: any) => ({
+              vto: d.dueDate,
               monto: d.amount,
               moneda: d.currency,
-              vencimiento: d.dueDate,
-              tasa_tna: d.rate,
-              cft_simulada: d.currency === 'ARS' ? "Requiere análisis vs futuros" : `${d.rate}%`
-          })),
-          resumen_inversiones: financialData.investments?.map((i: any) => ({
-              instrumento: i.instrumentName,
+              clase: 'EGRESO_DEUDA'
+          })).concat(financialData.investments?.map((i: any) => ({
+              vto: i.transactions?.find((t:any) => t.dueDate)?.dueDate,
+              monto: i.transactions?.reduce((s:number, t:any)=>s+(t.quantity*t.price),0),
               moneda: i.currency,
-              valor_mercado: i.transactions?.reduce((s: number, t: any) => s + (t.quantity * t.price), 0)
+              clase: 'INGRESO_INVERSION'
+          }))),
+          resumen_operativo: financialData.grainCollections?.map((c: any) => ({
+              vto: c.dueDate,
+              monto_neto: c.grossAmount * (1 - c.tentativeDeductionPercentage/100),
+              comprador: c.buyerName,
+              clase: 'INGRESO_GRANOS'
           }))
       };
 
-      // 3. Prompt Engineering: Definición de experto
       const systemInstruction = `
-        Eres "Gemini Finance", un asesor financiero senior experto en el mercado corporativo y agroindustrial argentino.
-        Tu misión es analizar la salud financiera del usuario basándote exclusivamente en los datos JSON provistos.
+        Eres "Gemini Treasury Expert", un CFO virtual para empresas del agro argentino.
+        Analizas liquidez, riesgo cambiario y estrategia de financiamiento.
         
-        REGLAS DE RESPUESTA:
-        1. TERMINOLOGÍA: Habla en términos de CFT (Costo Financiero Total), Exposición Cambiaria, Tasa Implícita de Futuros y Liquidez.
-        2. ANÁLISIS ARS vs USD: Si el usuario pregunta por deudas en pesos, compáralas contra la curva de futuros provista. Calcula mentalmente si la TNA de la deuda es mayor o menor a la tasa de devaluación esperada (TNA Implícita ROFEX).
-        3. ADVERTENCIAS: Advierte si hay mucha concentración de vencimientos en un solo mes o si las tasas de interés superan el 80% TNA en ARS.
-        4. FORMATO: Usa Markdown para listas, negritas y tablas. Sé profesional y directo.
-        5. LÍMITE: Si no tienes datos suficientes para una respuesta exacta, indica qué dato falta (ej. "faltan cotizaciones de futuros para el mes X").
+        Tus prioridades son:
+        1. LIQUIDITY GAPS: Detecta meses donde los egresos de deuda superan a los ingresos de granos e inversiones. Sugiere refinanciamiento o uso de líneas de crédito.
+        2. ESTRATEGIA ROFEX: Usa la curva de futuros para aconsejar si conviene pesificar deuda o mantenerla en USD.
+        3. CALCE OPERATIVO: Mira las cobranzas de granos. Si un ingreso de granos vence después de una deuda, advierte sobre el descalce de plazos.
+        
+        ESTILO: Profesional, ejecutivo, breve. Usa tablas si comparas montos. Resalta riesgos en negrita.
       `;
 
       const prompt = `
-        CONSULTA DEL USUARIO: "${userQuery}"
+        USUARIO: "${userQuery}"
         
-        CONTEXTO DE DATOS REALES:
+        DATA FINANCIERA ACTUALIZADA:
         ${JSON.stringify(dataContext, null, 2)}
       `;
 
-      // 4. Llamada al modelo
       const result = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
         contents: prompt,
         config: {
             systemInstruction: systemInstruction,
-            temperature: 0.2, // Mantenerlo preciso y poco creativo
-            topP: 0.8
+            temperature: 0.1,
+            topP: 0.95
         }
       });
 
-      const textResponse = result.text;
-      if (!textResponse) throw new Error("La IA no devolvió texto.");
-      
-      setResponse(textResponse);
+      setResponse(result.text || "No pude procesar el análisis.");
     } catch (err: any) {
-      console.error("Error Gemini API:", err);
-      setError("Error de conexión con la inteligencia financiera. Por favor, reintente en unos instantes.");
+      console.error("Error Gemini:", err);
+      setError("Error de red con la IA. Verifique su conexión.");
     } finally {
       setIsLoading(false);
     }
@@ -124,10 +117,10 @@ const AIQueryAssistantModal: React.FC<AIQueryAssistantModalProps> = ({ isOpen, o
   if (!isOpen) return null;
   
   const exampleQueries = [
-      "¿Qué me conviene más: tomar deuda en ARS al 70% o en USD al 5% con el ROFEX actual?",
-      "Analiza mi exposición al riesgo de devaluación según mi posición neta.",
-      "¿Cuál es el costo financiero promedio de mi cartera de deuda?",
-      "Haz un resumen de los vencimientos más críticos del próximo trimestre."
+      "¿Detectas algún bache de liquidez en el próximo trimestre?",
+      "¿Mis cobranzas de granos alcanzan para cubrir los vencimientos bancarios de este mes?",
+      "Analiza si me conviene tomar más deuda en pesos viendo la curva de futuros.",
+      "Resumen ejecutivo de mi posición neta estresada por una devaluación del 20%."
   ];
 
   return (
@@ -140,7 +133,7 @@ const AIQueryAssistantModal: React.FC<AIQueryAssistantModalProps> = ({ isOpen, o
                 <div className="p-2 bg-primary/20 rounded-lg">
                     <SparklesIcon className="w-6 h-6" />
                 </div>
-                <span>Estrategia Inteligente</span>
+                <span>CFO Inteligente</span>
             </div>
             <button onClick={onClose} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-colors">
                 <XIcon className="w-6 h-6 text-gray-500" />
@@ -150,14 +143,15 @@ const AIQueryAssistantModal: React.FC<AIQueryAssistantModalProps> = ({ isOpen, o
         {/* Content */}
         <div className="p-6 flex-grow overflow-y-auto custom-scrollbar">
             {isLoading ? (
-                 <div className="flex flex-col items-center justify-center h-full py-12">
-                    <div className="relative">
+                 <div className="flex flex-col items-center justify-center h-full py-12 text-center">
+                    <div className="relative mb-6">
                         <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-primary"></div>
                         <div className="absolute inset-0 flex items-center justify-center">
                             <SparklesIcon className="w-6 h-6 text-primary animate-pulse" />
                         </div>
                     </div>
-                    <p className="mt-6 text-gray-600 dark:text-gray-400 font-bold animate-pulse">Gemini está procesando tu escenario financiero...</p>
+                    <h4 className="text-lg font-bold text-gray-800 dark:text-gray-100">Analizando brechas y escenarios...</h4>
+                    <p className="text-gray-500 animate-pulse mt-2">Calculando calce de plazos y exposición cambiaria</p>
                 </div>
             ) : error ? (
                  <div className="p-4 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 rounded-xl border border-red-100 dark:border-red-800 flex items-center gap-3">
@@ -173,8 +167,8 @@ const AIQueryAssistantModal: React.FC<AIQueryAssistantModalProps> = ({ isOpen, o
                         <div className="inline-block p-4 bg-primary/10 rounded-full mb-4">
                             <SparklesIcon className="w-10 h-10 text-primary" />
                         </div>
-                        <h3 className="text-2xl font-bold text-gray-800 dark:text-gray-100">¿Qué analizamos hoy?</h3>
-                        <p className="text-gray-500 dark:text-gray-400 mt-2">Tengo acceso a tus deudas, inversiones y la curva de futuros para darte asesoramiento profesional.</p>
+                        <h3 className="text-2xl font-bold text-gray-800 dark:text-gray-100">Consultoría Estratégica</h3>
+                        <p className="text-gray-500 dark:text-gray-400 mt-2">Analizo tu flujo de caja proyectado, cobranzas de granos y deuda para optimizar tu tesorería.</p>
                     </div>
                     
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -184,7 +178,7 @@ const AIQueryAssistantModal: React.FC<AIQueryAssistantModalProps> = ({ isOpen, o
                                 onClick={() => handleExampleClick(ex)} 
                                 className="bg-gray-50 dark:bg-gray-700/50 hover:bg-primary/10 dark:hover:bg-primary/20 text-gray-700 dark:text-gray-200 font-medium p-4 rounded-2xl text-left transition-all border border-gray-100 dark:border-gray-600 hover:border-primary/40 group flex gap-3"
                              >
-                                <span className="text-primary group-hover:scale-125 transition-transform">•</span>
+                                <span className="text-primary group-hover:scale-125 transition-transform font-bold">»</span>
                                 {ex}
                             </button>
                         ))}
@@ -200,7 +194,7 @@ const AIQueryAssistantModal: React.FC<AIQueryAssistantModalProps> = ({ isOpen, o
                     <textarea
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
-                        placeholder="Ej: ¿Mi CFT en pesos es mayor a la devaluación esperada?"
+                        placeholder="Ej: ¿Qué mes es el más crítico para mi caja?"
                         className="w-full border border-gray-300 dark:border-gray-600 rounded-2xl shadow-sm py-3 px-5 focus:outline-none focus:ring-2 focus:ring-primary/50 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 resize-none h-[60px] transition-all"
                         disabled={isLoading}
                         onKeyDown={(e) => {
@@ -216,16 +210,16 @@ const AIQueryAssistantModal: React.FC<AIQueryAssistantModalProps> = ({ isOpen, o
                     className="bg-primary hover:bg-secondary text-white font-bold h-[60px] px-8 rounded-2xl transition-all shadow-lg shadow-primary/20 disabled:bg-gray-400 flex items-center gap-2 group" 
                     disabled={isLoading || !query.trim()}
                 >
-                    <span>Analizar</span>
+                    <span>Preguntar</span>
                     <SparklesIcon className="w-5 h-5 group-hover:rotate-12 transition-transform" />
                 </button>
             </form>
             {response && !isLoading && (
                 <button 
                     onClick={() => { setResponse(''); setQuery(''); }} 
-                    className="mt-3 text-xs text-primary dark:text-accent-dm font-bold hover:underline"
+                    className="mt-3 text-xs text-primary dark:text-accent-dm font-black hover:underline"
                 >
-                    NUEVA CONSULTA
+                    NUEVA CONSULTA ESTRATÉGICA
                 </button>
             )}
         </div>
