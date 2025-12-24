@@ -1,14 +1,14 @@
 
-
 /**
  * App.tsx: El componente raíz híbrido (Firebase / Demo Mode).
  */
 import React, { createContext, useContext, useReducer, useEffect, useMemo, useState, lazy, Suspense } from 'react';
 import type { View, AppState, User, Permissions, Toast, Debt } from './types';
 import { getInitialState } from './data';
-import { auth, db, isFirebaseEnabled } from './firebaseConfig';
+import { auth, db, isFirebaseEnabled, analytics } from './firebaseConfig';
 import { onAuthStateChanged } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
+import { logEvent } from "firebase/analytics";
 import * as api from './services/api';
 import { DEFAULT_USERS } from './auth';
 
@@ -51,7 +51,6 @@ const appReducer = (state: AppState, action: any): AppState => {
         case 'REMOVE_TOAST':
             return { ...state, toasts: state.toasts.filter(t => t.id !== action.payload) };
         case 'SAVE_DEBT_SUCCESS':
-        // FIX: Handle success for arbitrage operations in the reducer to show toast notifications.
         case 'SAVE_ARBITRAGE_SUCCESS':
         case 'DELETE_DEBT_SUCCESS':
         case 'DELETE_ARBITRAGE_SUCCESS':
@@ -74,7 +73,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     useEffect(() => {
         // Lógica de Inicialización Híbrida
         if (!isFirebaseEnabled || !auth) {
-            // MODO DEMO: No hay Firebase, intentamos cargar usuario de sesión anterior o nada
             const savedUser = localStorage.getItem('demo_user');
             if (savedUser) {
                 dispatch({ type: 'SET_AUTH_USER', payload: { user: JSON.parse(savedUser), token: 'demo-token' } });
@@ -151,9 +149,23 @@ const App: React.FC = () => {
         else document.documentElement.classList.remove('dark');
     }, [appSettings.theme]);
 
+    // Analytics: Track module usage
+    useEffect(() => {
+        if (isFirebaseEnabled && analytics && currentUser) {
+            logEvent(analytics, 'screen_view', {
+                screen_name: activeView,
+                user_role: currentUser.role
+            });
+        }
+    }, [activeView, currentUser]);
+
     const handleLogin = (payload: { user: User, token: string }) => {
         if (!isFirebaseEnabled) localStorage.setItem('demo_user', JSON.stringify(payload.user));
         dispatch({ type: 'SET_AUTH_USER', payload });
+        
+        if (isFirebaseEnabled && analytics) {
+            logEvent(analytics, 'login', { method: 'email' });
+        }
     };
 
     if (!currentUser) {

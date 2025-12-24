@@ -1,6 +1,6 @@
 
 /**
- * firebaseConfig.ts: Centraliza la inicialización de Firebase.
+ * firebaseConfig.ts: Centraliza la inicialización de Firebase con Hardening de Seguridad (Fase 7).
  */
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
@@ -10,6 +10,7 @@ import { getStorage } from "firebase/storage";
 import { getAnalytics, isSupported } from "firebase/analytics";
 import { getPerformance } from "firebase/performance";
 import { getRemoteConfig } from "firebase/remote-config";
+import { initializeAppCheck, ReCaptchaEnterpriseProvider } from "firebase/app-check";
 
 // Configuración de Firebase utilizando variables de entorno.
 const firebaseConfig = {
@@ -23,11 +24,10 @@ const firebaseConfig = {
 };
 
 // Validación estricta para evitar errores 400 del servicio de Instalaciones
-// Si las claves contienen los placeholders por defecto de la consola de Firebase, se considera inválido.
 export const isFirebaseEnabled = Boolean(
   firebaseConfig.apiKey && 
   !firebaseConfig.apiKey.includes("TU_API_KEY") &&
-  !firebaseConfig.apiKey.startsWith("AIzaSy...") && // Clave de ejemplo habitual
+  !firebaseConfig.apiKey.startsWith("AIzaSy...") &&
   firebaseConfig.projectId &&
   firebaseConfig.projectId !== "tu-proyecto"
 );
@@ -46,21 +46,35 @@ export const remoteConfig = (app && isFirebaseEnabled) ? getRemoteConfig(app) : 
 
 let analytics: any = null;
 let performance: any = null;
+let appCheck: any = null;
 
 if (app && isFirebaseEnabled && typeof window !== "undefined") {
-  isSupported().then(yes => {
-    if (yes) {
+  // Initialize App Check to protect resources from non-app traffic
+  try {
+    appCheck = initializeAppCheck(app, {
+      provider: new ReCaptchaEnterpriseProvider(process.env.RECAPTCHA_SITE_KEY || '6Lf...YOUR_RECAPTCHA_KEY'),
+      isTokenAutoRefreshEnabled: true
+    });
+  } catch (e) {
+    console.warn("App Check failed to initialize. Security may be limited in local development.");
+  }
+
+  // Initialize Analytics with feature detection
+  isSupported().then(supported => {
+    if (supported) {
         try {
             analytics = getAnalytics(app);
         } catch (e) {}
     }
   });
+
+  // Initialize Performance Monitoring
   try {
       performance = getPerformance(app);
   } catch (e) {}
 }
 
-export { analytics, performance };
+export { analytics, performance, appCheck };
 
 if (!isFirebaseEnabled) {
   console.info("ℹ️ Firebase no configurado o claves inválidas. La aplicación funcionará en 'Modo Demostración' usando almacenamiento local.");
