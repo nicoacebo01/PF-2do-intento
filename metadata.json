@@ -1,0 +1,5 @@
+{
+  "name": "Plataforma PF - 2do intento",
+  "description": "An application for companies to register and track their various financial debts, including loans, check discounting, and other instruments. It allows users to monitor due dates, interest rates, and the daily evolution of total debt measured in USD by inputting daily exchange rates.",
+  "requestFramePermissions": []
+}
