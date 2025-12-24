@@ -1,8 +1,8 @@
+
 import React, { useState } from 'react';
 import ExchangeRateSettings from './ExchangeRateSettings';
 import MarketPriceSettings from './MarketPriceSettings';
-import { TrashIcon } from '../Icons';
-import FormattedNumberInput from '../FormattedNumberInput';
+import { TrashIcon, ArrowsUpDownIcon, SparklesIcon } from '../Icons';
 
 interface HolidaySettingsProps {
   holidays: string[];
@@ -15,19 +15,16 @@ const HolidaySettings: React.FC<HolidaySettingsProps> = ({ holidays, onUpdateHol
   const handleAddHoliday = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newHoliday) return;
-    
     const date = new Date(newHoliday + 'T00:00:00Z');
     const dayOfWeek = date.getUTCDay();
     if (dayOfWeek === 0 || dayOfWeek === 6) {
         alert('No se pueden agregar sábados o domingos como feriados.');
         return;
     }
-
     if (holidays.includes(newHoliday)) {
         alert('Este feriado ya ha sido agregado.');
         return;
     }
-    
     const updatedHolidays = [...holidays, newHoliday].sort();
     onUpdateHolidays(updatedHolidays);
     setNewHoliday('');
@@ -37,61 +34,43 @@ const HolidaySettings: React.FC<HolidaySettingsProps> = ({ holidays, onUpdateHol
     onUpdateHolidays(holidays.filter(h => h !== holidayToDelete));
   };
   
-  const commonInputClass = "border border-gray-300 rounded-md py-2 px-3 text-sm bg-white text-gray-900 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600";
-
   return (
     <div>
       <h3 className="text-xl font-semibold text-gray-700 dark:text-gray-200 mb-4 border-b dark:border-gray-700 pb-2">Gestionar Feriados</h3>
-      <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-        Agregue los días feriados que no deben ser considerados en los cálculos de días hábiles.
-        Los sábados y domingos se excluyen automáticamente.
-      </p>
       <form onSubmit={handleAddHoliday} className="space-y-4 bg-gray-100 dark:bg-gray-800/50 p-6 rounded-lg mb-6">
-        <h4 className="text-lg font-medium text-gray-800 dark:text-gray-200">Agregar Feriado</h4>
         <div className="flex items-end gap-4">
           <div className="flex-grow">
-            <label htmlFor="holiday-date" className="block text-sm font-medium text-gray-600 dark:text-gray-300">Fecha</label>
-            <input
-              id="holiday-date"
-              type="date"
-              value={newHoliday}
-              onChange={e => setNewHoliday(e.target.value)}
-              className={`mt-1 block w-full ${commonInputClass}`}
-              required
-            />
+            <label className="block text-sm font-medium text-gray-600 dark:text-gray-300">Fecha</label>
+            <input type="date" value={newHoliday} onChange={e => setNewHoliday(e.target.value)} className="mt-1 block w-full border border-gray-300 rounded-md py-2 px-3 text-sm bg-white dark:bg-gray-700" required />
           </div>
-          <button type="submit" className="bg-primary hover:bg-secondary text-white font-bold py-2 px-4 rounded-lg h-10">
-            Agregar
-          </button>
+          <button type="submit" className="bg-primary text-white font-bold py-2 px-4 rounded-lg h-10">Agregar</button>
         </div>
       </form>
-      
-      <div>
-        <h4 className="text-lg font-medium text-gray-800 dark:text-gray-200 mb-3">Feriados Cargados</h4>
-        <div className="space-y-2 max-h-80 overflow-y-auto pr-2 border rounded-lg p-2 bg-gray-100 dark:bg-gray-800/50 dark:border-gray-700">
-          {holidays.length > 0 ? [...holidays].sort().map(holiday => (
-            <div key={holiday} className="flex justify-between items-center bg-white dark:bg-gray-800 p-2 rounded-md shadow-sm">
-              <span className="font-semibold text-gray-700 dark:text-gray-200">
-                {new Date(holiday + 'T00:00:00Z').toLocaleDateString('es-AR', { timeZone: 'UTC', year: 'numeric', month: 'long', day: 'numeric' })}
-              </span>
-              <button onClick={() => handleDeleteHoliday(holiday)} className="text-red-500 hover:text-red-700" title="Eliminar">
-                <TrashIcon />
-              </button>
-            </div>
-          )) : (
-            <p className="text-center text-gray-500 dark:text-gray-400 py-4">No hay feriados registrados.</p>
-          )}
-        </div>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+          {holidays.map(h => (
+              <div key={h} className="bg-white dark:bg-gray-800 p-2 border rounded flex justify-between items-center text-xs">
+                  <span>{h}</span>
+                  <button onClick={() => handleDeleteHoliday(h)} className="text-red-500"><TrashIcon /></button>
+              </div>
+          ))}
       </div>
     </div>
   );
 };
 
-
 const MarketDataSettings: React.FC<any> = (props) => {
     const [activeView, setActiveView] = useState<'rates' | 'prices' | 'holidays'>('rates');
-    
-    const TabButton: React.FC<{view: 'rates' | 'prices' | 'holidays', label: string}> = ({view, label}) => (
+    const [isSyncing, setIsSyncing] = useState(false);
+
+    const simulateSync = () => {
+        setIsSyncing(true);
+        setTimeout(() => {
+            setIsSyncing(false);
+            alert("Sincronización con Matba-Rofex y Bloomberg completada (Simulado)");
+        }, 2000);
+    };
+
+    const TabButton: React.FC<{view: any, label: string}> = ({view, label}) => (
       <button 
         onClick={() => setActiveView(view)}
         className={`px-4 py-2 text-sm font-semibold rounded-md transition-colors ${activeView === view 
@@ -100,14 +79,24 @@ const MarketDataSettings: React.FC<any> = (props) => {
       >
           {label}
       </button>
-  );
+    );
 
     return (
         <div>
-            <div className="flex items-center gap-2 border-b dark:border-gray-700 pb-4 mb-6">
-                <TabButton view="rates" label="Tipos de Cambio" />
-                <TabButton view="prices" label="Cotizaciones de Mercado" />
-                <TabButton view="holidays" label="Feriados" />
+            <div className="flex justify-between items-center border-b dark:border-gray-700 pb-4 mb-6">
+                <div className="flex items-center gap-2">
+                    <TabButton view="rates" label="Tipos de Cambio" />
+                    <TabButton view="prices" label="Cotizaciones de Mercado" />
+                    <TabButton view="holidays" label="Feriados" />
+                </div>
+                <button 
+                    onClick={simulateSync}
+                    disabled={isSyncing}
+                    className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold py-2 px-4 rounded-lg disabled:bg-gray-400 transition-all shadow-lg shadow-indigo-200 dark:shadow-none"
+                >
+                    <ArrowsUpDownIcon className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
+                    {isSyncing ? 'SINCRONIZANDO...' : 'AUTO-SYNC MERCADO'}
+                </button>
             </div>
             {activeView === 'rates' && <ExchangeRateSettings {...props} />}
             {activeView === 'prices' && <MarketPriceSettings {...props} priceHistory={props.marketPriceHistory} />}

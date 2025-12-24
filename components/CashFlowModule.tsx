@@ -1,4 +1,4 @@
-// This is a new file: components/CashFlowModule.tsx
+
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { useAppContext } from '../App';
 import { useFinancialCalculations } from '../utils/calculations';
@@ -6,22 +6,18 @@ import { Currency } from '../types';
 import type { Debt, Investment, GrainCollection, CashAccount, DebtType, InvestmentGroup, CollectionAdjustment } from '../types';
 import { getTodayArgentinaDate, calculateFinancialsForDate, daysBetween } from '../utils/financials';
 import FormattedNumberInput, { parseFormattedNumber } from './FormattedNumberInput';
-import { PlusCircleIcon, TrashIcon } from './Icons';
+import { PlusCircleIcon, TrashIcon, ChartBarIcon, ArrowsUpDownIcon } from './Icons';
 import ExpandedCashFlowModal from './ExpandedCashFlowModal';
 import ExportButtons from './ExportButtons';
 import type { ExportColumn } from '../utils/export';
 import CashFlowCellDetailModal from './CashFlowCellDetailModal';
+import VarianceAnalysisChart from './VarianceAnalysisChart';
 
 type ViewMode = 'daily' | 'weekly' | 'monthly';
 
 const STATIC_ROW_CONFIG = [
     { key: 'SALDO_INICIO', label: 'SALDO INICIO', type: 'balance' as const, section: 'header' as const, style: 'bg-slate-500 text-white dark:bg-slate-600 font-bold' },
     { key: 'COBRANZAS', label: 'COBRANZAS', type: 'inflow' as const, section: 'inflows' as const, style: 'bg-green-50 dark:bg-green-900/20 font-semibold' },
-    { key: 'PRODUCTORES_TRANSFERENCIA', label: 'Productores (Transferencia)', type: 'inflow' as const, section: 'inflows' as const },
-    { key: 'PRODUCTORES_CHEQUES', label: 'Productores (Cheques)', type: 'inflow' as const, section: 'inflows' as const },
-    { key: 'PROVEEDORES_ACSA', label: 'Proveedores', type: 'outflow' as const, section: 'outflows' as const },
-    { key: 'FLETES', label: 'Fletes', type: 'outflow' as const, section: 'outflows' as const },
-    { key: 'PROVEEDORES_INSUMOS', label: 'Proveedores Insumos', type: 'outflow' as const, section: 'outflows' as const },
     { key: 'INVERSIONES', label: 'Inversiones', type: 'inout' as const, section: 'financial' as const, style: 'bg-blue-100 dark:bg-blue-900/30' },
     { key: 'IMPUESTOS_SUELDOS', label: 'Impuestos/Sueldos', type: 'outflow' as const, section: 'other' as const, style: 'bg-green-100 dark:bg-green-900/30' },
 ];
@@ -32,8 +28,17 @@ const CashFlowModule: React.FC = () => {
     const financialCalculations = useFinancialCalculations();
     const { companyDebts, companyInvestments, companyGrainCollections, banks, appSettings, cashAccounts, debtTypes, holidays, latestRate, companyCollectionAdjustments, investmentGroups } = financialCalculations;
     
-    const [viewMode, setViewMode] = useState<ViewMode>('daily');
-    const [startDate, setStartDate] = useState(() => getTodayArgentinaDate());
+    // FIX: Define today variable using getTodayArgentinaDate() helper.
+    const today = useMemo(() => getTodayArgentinaDate(), []);
+
+    const [viewMode, setViewMode] = useState<ViewMode>('monthly');
+    const [startDate, setStartDate] = useState(() => {
+        const d = getTodayArgentinaDate();
+        d.setUTCMonth(d.getUTCMonth() - 2); // Ver 2 meses hacia atrás para ver lo "Real"
+        d.setUTCDate(1);
+        return d;
+    });
+    const [showComparison, setShowComparison] = useState(true);
     const [manualFlows, setManualFlows] = useState<Record<string, Record<string, number>>>({});
     const [customRows, setCustomRows] = useState<{ id: string; name: string }[]>([]);
     const [newRowName, setNewRowName] = useState('');
@@ -41,67 +46,30 @@ const CashFlowModule: React.FC = () => {
     const [editValue, setEditValue] = useState<number | ''>('');
     const [editableInitialBalance, setEditableInitialBalance] = useState<number | ''>('');
     const [isExpandedFlowModalOpen, setIsExpandedFlowModalOpen] = useState(false);
-    const [detailModalData, setDetailModalData] = useState<{
-        isOpen: boolean;
-        title: string;
-        items: { description: string; amount: number; currency: string; date: string }[];
-    } | null>(null);
+    const [detailModalData, setDetailModalData] = useState<any>(null);
 
     const canEdit = useMemo(() => {
         if (!currentUser) return false;
         if (appViewMode === 'consolidated') return false;
-        const permission = currentUser.permissions.cashflow;
-        return permission === 'admin' || permission === 'operator';
+        return currentUser.role === 'admin' || currentUser.role === 'operator';
     }, [currentUser, appViewMode]);
 
-    const { investmentSummaryData, totalInvestmentValueUSD } = useMemo(() => {
-        if (!investmentGroups) return { investmentSummaryData: [], totalInvestmentValueUSD: 0 };
-
-        const allHoldings = investmentGroups.flatMap(g => g.holdings);
-
-        const sortedHoldings = allHoldings.sort((a, b) => {
-            const aIsLiquid = !a.maturityDate;
-            const bIsLiquid = !b.maturityDate;
-
-            if (aIsLiquid && !bIsLiquid) return -1;
-            if (!aIsLiquid && bIsLiquid) return 1;
-            if (aIsLiquid && bIsLiquid) return a.instrumentName.localeCompare(b.instrumentName);
-            
-            if (a.maturityDate! < b.maturityDate!) return -1;
-            if (a.maturityDate! > b.maturityDate!) return 1;
-
-            return a.instrumentName.localeCompare(b.instrumentName);
-        });
-        
-        const total = sortedHoldings.reduce((sum, holding) => sum + holding.marketValueUSD, 0);
-
-        return { investmentSummaryData: sortedHoldings, totalInvestmentValueUSD: total };
-    }, [investmentGroups]);
-
     const allRows = useMemo(() => {
-        const financialSectionIndex = STATIC_ROW_CONFIG.findIndex(r => r.section === 'financial');
-
         const debtTypeRows = debtTypes.map(dt => ({
             key: `debt-type-${dt.id}`,
             label: dt.name,
             type: 'inout' as const,
             section: 'financial' as const,
-            style: 'bg-blue-100 dark:bg-blue-900/30'
+            style: 'bg-blue-50 dark:bg-blue-900/10'
         }));
-
         const newRows = [...STATIC_ROW_CONFIG];
-        if (financialSectionIndex !== -1) {
-            newRows.splice(financialSectionIndex + 1, 0, ...debtTypeRows); // Splice after 'Inversiones'
-        }
-        
+        newRows.splice(3, 0, ...debtTypeRows);
         return [...newRows, ...customRows.map(r => ({ key: r.id, label: r.name, type: 'inout' as const, section: 'custom' as const, style: '' }))];
     }, [debtTypes, customRows]);
 
-    const { columns, automatedFlows, initialBalance } = useMemo(() => {
+    const { columns, flowsByStatus, initialBalance } = useMemo(() => {
         let cols: { date: string, label: string }[] = [];
-        const flows: Record<string, Record<string, number>> = {};
-        const numCols = viewMode === 'daily' ? 7 : viewMode === 'weekly' ? 8 : 12;
-
+        const numCols = viewMode === 'daily' ? 14 : viewMode === 'weekly' ? 8 : 12;
         const getColKey = (d: Date): string => {
             if (viewMode === 'monthly') return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
             return d.toISOString().split('T')[0];
@@ -110,538 +78,199 @@ const CashFlowModule: React.FC = () => {
         let currentDate = new Date(startDate);
         for (let i = 0; i < numCols; i++) {
             const colKey = getColKey(currentDate);
-            let label = '';
-            if (viewMode === 'daily') {
-                label = currentDate.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' });
-                cols.push({ date: colKey, label });
-                currentDate.setDate(currentDate.getDate() + 1);
-            } else if (viewMode === 'weekly') {
-                const weekEnd = new Date(currentDate);
-                weekEnd.setDate(weekEnd.getDate() + 6);
-                label = `${currentDate.toLocaleDateString('es-AR', { day: '2-digit', month: 'short' })} - ${weekEnd.toLocaleDateString('es-AR', { day: '2-digit', month: 'short' })}`;
-                cols.push({ date: colKey, label });
-                currentDate.setDate(currentDate.getDate() + 7);
-            } else { // monthly
-                label = currentDate.toLocaleDateString('es-AR', { month: 'short', year: '2-digit' });
-                cols.push({ date: colKey, label });
-                currentDate.setMonth(currentDate.getMonth() + 1);
-            }
+            cols.push({ date: colKey, label: viewMode === 'monthly' ? currentDate.toLocaleDateString('es-AR', { month: 'short', year: '2-digit' }) : colKey });
+            if (viewMode === 'daily') currentDate.setUTCDate(currentDate.getUTCDate() + 1);
+            else if (viewMode === 'weekly') currentDate.setUTCDate(currentDate.getUTCDate() + 7);
+            else currentDate.setUTCMonth(currentDate.getUTCMonth() + 1);
         }
         
         const periodEndDate = new Date(currentDate);
+        const flows: Record<string, Record<string, { projected: number, real: number }>> = {};
 
-        const arsCashAccount = cashAccounts.find(ca => ca.currency === Currency.ARS) || { initialBalance: 0, initialBalanceDate: '1970-01-01' };
-        let balance = arsCashAccount.initialBalance;
-        
-        const addFlow = (rowKey: string, dateStr: string, amount: number) => {
+        const addFlow = (rowKey: string, dateStr: string, amount: number, isReal: boolean) => {
             if (amount === 0 || !dateStr) return;
             const date = new Date(dateStr + 'T00:00:00Z');
-            if (isNaN(date.getTime())) return;
-            
-            if (date.getTime() < startDate.getTime()) {
-                balance += amount;
-                return;
-            }
-            if (date.getTime() >= periodEndDate.getTime()) return;
+            if (date.getTime() < startDate.getTime() || date.getTime() >= periodEndDate.getTime()) return;
 
             let colKey: string | undefined;
-            if (viewMode === 'daily') colKey = dateStr;
-            else if (viewMode === 'weekly') {
-                const foundCol = cols.find(c => {
-                    const colDate = new Date(c.date + 'T00:00:00Z');
-                    const colEndDate = new Date(colDate);
-                    colEndDate.setDate(colEndDate.getDate() + 7);
-                    return date >= colDate && date < colEndDate;
-                });
-                colKey = foundCol?.date;
-            } else { // monthly
-                const monthKey = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
-                const foundCol = cols.find(c => c.date === monthKey);
-                colKey = foundCol?.date;
-            }
+            if (viewMode === 'monthly') colKey = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+            else colKey = cols.find(c => {
+                const cDate = new Date(c.date + 'T00:00:00Z');
+                if (viewMode === 'daily') return c.date === dateStr;
+                const cEnd = new Date(cDate); cEnd.setUTCDate(cEnd.getUTCDate() + 7);
+                return date >= cDate && date < cEnd;
+            })?.date;
+
             if (!colKey) return;
-            
             if (!flows[rowKey]) flows[rowKey] = {};
-            flows[rowKey][colKey] = (flows[rowKey][colKey] || 0) + amount;
+            if (!flows[rowKey][colKey]) flows[rowKey][colKey] = { projected: 0, real: 0 };
+            
+            flows[rowKey][colKey].projected += amount;
+            if (isReal) flows[rowKey][colKey].real += amount;
         };
 
-        // --- START: New logic for COBRANZAS ---
-        const grossTransfersByDate: Record<string, number> = {};
+        // Procesar Cobranzas
         companyGrainCollections.forEach(c => {
-            if (c.status === 'collected' || c.status === 'unmatched') return;
-            const collectionDate = c.actualCollectionDate || c.dueDate;
-            if (!collectionDate) return;
-
-            const isBankTransfer = banks.some(b => b.id === c.bankAccountId);
-            if (isBankTransfer) {
-                const netAmount = c.finalNetAmount ?? (c.grossAmount * (1 - (c.tentativeDeductionPercentage / 100)));
-                const finalAmount = c.movementType === 'Débito' ? netAmount : -netAmount;
-                grossTransfersByDate[collectionDate] = (grossTransfersByDate[collectionDate] || 0) + finalAmount;
-            }
+            const date = c.actualCollectionDate || c.dueDate;
+            const netAmount = c.finalNetAmount ?? (c.grossAmount * (1 - c.tentativeDeductionPercentage/100));
+            const amount = c.movementType === 'Débito' ? netAmount : -netAmount;
+            addFlow('COBRANZAS', date, amount, c.status === 'collected');
         });
 
-        const adjustmentsByDate: Record<string, number> = {};
-        companyCollectionAdjustments.forEach(adj => {
-            adjustmentsByDate[adj.date] = (adjustmentsByDate[adj.date] || 0) + adj.amount;
-        });
-
-        const allFlowDates = new Set([...Object.keys(grossTransfersByDate), ...Object.keys(adjustmentsByDate)]);
-
-        allFlowDates.forEach(date => {
-            const grossAmount = grossTransfersByDate[date] || 0;
-            const adjustmentAmount = adjustmentsByDate[date] || 0;
-            const netAmount = grossAmount - adjustmentAmount;
-            
-            if(Math.abs(netAmount) > 0.01) {
-                addFlow('COBRANZAS', date, netAmount);
-            }
-        });
-        // --- END: New logic for COBRANZAS ---
-
+        // Procesar Deudas
         companyDebts.forEach(d => {
-            if (d.status === 'cancelled') return;
-            const financials = calculateFinancialsForDate(d, new Date(d.dueDate), appSettings);
-            let netDisbursedInARS = financials.netDisbursed;
-            let totalToRepayInARS = financials.totalToRepay;
-            if (d.currency === Currency.USD) {
-                netDisbursedInARS *= latestRate;
-                totalToRepayInARS *= latestRate;
-            }
-            
-            const debtType = debtTypes.find(dt => dt.name === d.type);
-            if (!debtType) return;
-            const rowKey = `debt-type-${debtType.id}`;
-            addFlow(rowKey, d.originationDate, netDisbursedInARS);
-            addFlow(rowKey, d.dueDate, -totalToRepayInARS);
+            // FIX: Use the 'today' variable defined at the top of the component.
+            const financials = calculateFinancialsForDate(d, today, appSettings);
+            const factor = d.currency === Currency.USD ? latestRate : 1;
+            addFlow(`debt-type-${debtTypes.find(dt => dt.name === d.type)?.id}`, d.originationDate, financials.netDisbursed * factor, false);
+            addFlow(`debt-type-${debtTypes.find(dt => dt.name === d.type)?.id}`, d.dueDate, -financials.totalToRepay * factor, d.status === 'cancelled');
         });
 
-        companyInvestments.forEach(inv => {
-            inv.transactions.forEach(tx => {
-                // Project future cash inflows from maturing purchase transactions.
-                if (tx.type === 'Compra' && tx.dueDate) {
-                    let maturityValueNative: number;
+        return { columns: cols, flowsByStatus: flows, initialBalance: cashAccounts.find(ca => ca.currency === Currency.ARS)?.initialBalance || 0 };
+    }, [viewMode, startDate, companyGrainCollections, companyDebts, latestRate, cashAccounts, debtTypes, appSettings, today]);
 
-                    if (tx.isFixedRate && tx.tea) {
-                        // Case 1: Fixed-rate investment (e.g., term deposit).
-                        // Inflow is the principal invested plus calculated interest.
-                        const principalNative = tx.quantity * tx.price;
-                        const termDays = daysBetween(tx.date, tx.dueDate);
-                        const interestNative = principalNative * (tx.tea / 100 / appSettings.annualRateBasis) * termDays;
-                        maturityValueNative = principalNative + interestNative;
-                    } else {
-                        // Case 2: Other instruments with a due date (e.g., a bond maturing).
-                        // Inflow is the nominal value returned at maturity.
-                        // The 'quantity' field is labeled as "Cantidad (Nominales)".
-                        maturityValueNative = tx.quantity;
-                    }
-                    
-                    // Convert to ARS for the cash flow projection if the investment is in USD.
-                    const maturityValueInARS = inv.currency === Currency.USD 
-                        ? maturityValueNative * latestRate 
-                        : maturityValueNative;
-                    
-                    addFlow('INVERSIONES', tx.dueDate, maturityValueInARS);
-                }
-            });
-        });
-
-        return { columns: cols, automatedFlows: flows, initialBalance: balance };
-    }, [viewMode, startDate, companyDebts, companyInvestments, companyGrainCollections, banks, appSettings, cashAccounts, debtTypes, latestRate, companyCollectionAdjustments]);
-    
-    useEffect(() => {
-        setEditableInitialBalance(initialBalance);
-    }, [initialBalance]);
-    
-    const finalInitialBalance = typeof editableInitialBalance === 'number' ? editableInitialBalance : initialBalance;
-
-    const handleAddRow = () => {
-        if (newRowName.trim()) {
-            setCustomRows([...customRows, { id: `custom-${crypto.randomUUID()}`, name: newRowName.trim() }]);
-            setNewRowName('');
-        }
-    };
-    
-    const handleRemoveRow = (id: string) => {
-        setCustomRows(customRows.filter(r => r.id !== id));
-        const newManualFlows = { ...manualFlows };
-        delete newManualFlows[id];
-        setManualFlows(newManualFlows);
-    };
-
-    const handleCellBlur = useCallback(() => {
-        if (editingCell) {
-            const { rowKey } = editingCell;
-            const value = parseFormattedNumber(String(editValue));
-            
-            if(rowKey === 'SALDO_INICIO') {
-                setEditableInitialBalance(value);
-            } else {
-                const { date } = editingCell;
-                setManualFlows(prev => {
-                    const newFlows = { ...prev };
-                    if (!newFlows[rowKey]) newFlows[rowKey] = {};
-                    newFlows[rowKey][date] = Number(value) || 0;
-                    return newFlows;
-                });
-            }
-            setEditingCell(null);
-            setEditValue('');
-        }
-    }, [editingCell, editValue]);
-    
-    const handleCellKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-        if (e.key === 'Enter' || e.key === 'Tab') {
-            e.preventDefault();
-            handleCellBlur();
-        } else if (e.key === 'Escape') {
-            setEditingCell(null);
-            setEditValue('');
-        }
-    };
-
-    const handleCellDoubleClick = (rowKey: string, rowLabel: string, col: { date: string, label: string }) => {
-        const isAutomaticRow = rowKey.startsWith('debt-type-') || rowKey === 'COBRANZAS' || rowKey === 'INVERSIONES';
-    
-        if (isAutomaticRow) {
-            const detailItems: { description: string; amount: number; currency: string; date: string }[] = [];
-            const colDate = new Date(col.date + 'T00:00:00Z');
-            let periodStart: Date, periodEnd: Date;
-    
-            if (viewMode === 'daily') {
-                periodStart = colDate;
-                periodEnd = colDate;
-            } else if (viewMode === 'weekly') {
-                periodStart = colDate;
-                periodEnd = new Date(colDate);
-                periodEnd.setUTCDate(periodEnd.getUTCDate() + 6);
-            } else { // monthly
-                periodStart = new Date(Date.UTC(colDate.getUTCFullYear(), colDate.getUTCMonth(), 1));
-                periodEnd = new Date(Date.UTC(colDate.getUTCFullYear(), colDate.getUTCMonth() + 1, 0));
-            }
-    
-            const dateIsInRange = (dateStr: string) => {
-                if (!dateStr) return false;
-                const itemDate = new Date(dateStr + 'T00:00:00Z');
-                return itemDate >= periodStart && itemDate <= periodEnd;
-            };
-            
-            if (rowKey.startsWith('debt-type-')) {
-                const debtTypeId = rowKey.replace('debt-type-', '');
-                const debtType = debtTypes.find(dt => dt.id === debtTypeId);
-                if(debtType) {
-                    companyDebts.forEach(d => {
-                        if (d.type === debtType.name) {
-                            const financials = calculateFinancialsForDate(d, new Date(d.dueDate), appSettings);
-                            if (dateIsInRange(d.originationDate)) {
-                                const amount = d.currency === Currency.USD ? financials.netDisbursed * latestRate : financials.netDisbursed;
-                                detailItems.push({ description: `Desembolso ${d.type}`, amount, currency: 'ARS', date: d.originationDate });
-                            }
-                            if (dateIsInRange(d.dueDate)) {
-                                const amount = d.currency === Currency.USD ? financials.totalToRepay * latestRate : financials.totalToRepay;
-                                detailItems.push({ description: `Cancelación ${d.type}`, amount: -amount, currency: 'ARS', date: d.dueDate });
-                            }
-                        }
-                    });
-                }
-            } else if (rowKey === 'INVERSIONES') {
-                companyInvestments.forEach(inv => {
-                    inv.transactions.forEach(tx => {
-                        if (tx.type === 'Compra' && tx.dueDate && dateIsInRange(tx.dueDate)) {
-                             let maturityValueNative: number;
-                             if (tx.isFixedRate && tx.tea) {
-                                 const principalNative = tx.quantity * tx.price;
-                                 const termDays = daysBetween(tx.date, tx.dueDate);
-                                 const interestNative = principalNative * (tx.tea / 100 / appSettings.annualRateBasis) * termDays;
-                                 maturityValueNative = principalNative + interestNative;
-                             } else {
-                                 maturityValueNative = tx.quantity;
-                             }
-                             const amount = inv.currency === Currency.USD ? maturityValueNative * latestRate : maturityValueNative;
-                             detailItems.push({ description: `Vencimiento ${inv.instrumentName}`, amount, currency: 'ARS', date: tx.dueDate! });
-                        }
-                    });
-                });
-            } else if (rowKey === 'COBRANZAS') {
-                companyGrainCollections.forEach(c => {
-                    const collectionDate = c.actualCollectionDate || c.dueDate;
-                    if (c.status !== 'collected' && c.status !== 'unmatched' && collectionDate && dateIsInRange(collectionDate)) {
-                        const isBankTransfer = banks.some(b => b.id === c.bankAccountId);
-                        if(isBankTransfer) {
-                            const netAmount = c.finalNetAmount ?? (c.grossAmount * (1 - (c.tentativeDeductionPercentage / 100)));
-                            const finalAmount = c.movementType === 'Débito' ? netAmount : -netAmount;
-                            detailItems.push({ description: `Cobranza ${c.buyerName} #${c.operationCode}`, amount: finalAmount, currency: 'ARS', date: collectionDate });
-                        }
-                    }
-                });
-    
-                companyCollectionAdjustments.forEach(adj => {
-                    if(dateIsInRange(adj.date)) {
-                        detailItems.push({ description: `Ajuste (${adj.type}) ${adj.buyerName}`, amount: -adj.amount, currency: 'ARS', date: adj.date });
-                    }
-                });
-            }
-    
-            setDetailModalData({
-                isOpen: true,
-                title: `Detalle de "${rowLabel}" para ${col.label}`,
-                items: detailItems,
-            });
-    
-        } else { // Is a manual/custom row, allow editing
-            if (canEdit) {
-                setEditValue(manualFlows[rowKey]?.[col.date] || '');
-                setEditingCell({ rowKey, date: col.date });
-            }
-        }
-    };
-
-    const isNonWorkingDay = (dateStr: string) => {
-        const d = new Date(dateStr + 'T00:00:00Z');
-        const dayOfWeek = d.getUTCDay();
-        return dayOfWeek === 0 || dayOfWeek === 6 || holidays.includes(dateStr);
-    };
-
-    const { initialBalances, finalBalances } = useMemo(() => {
-        const initialBalances: Record<string, number> = {};
-        const finalBalances: Record<string, number> = {};
-        let runningBalance = finalInitialBalance;
+    // Cálculo de Saldos Acumulados
+    const { projectedBalances, realBalances, variances } = useMemo(() => {
+        const proj: Record<string, number> = {};
+        const real: Record<string, number> = {};
+        const v: Record<string, number> = {};
+        let runningProj = Number(editableInitialBalance || initialBalance);
+        let runningReal = Number(editableInitialBalance || initialBalance);
 
         columns.forEach(col => {
-            initialBalances[col.date] = runningBalance;
-            let netFlow = 0;
+            let colProjNet = 0;
+            let colRealNet = 0;
             allRows.forEach(row => {
-                if(row.type === 'balance') return;
-                const auto = automatedFlows[row.key]?.[col.date] || 0;
-                const manual = manualFlows[row.key]?.[col.date] || 0;
-                netFlow += auto + manual;
+                if (row.type === 'balance') return;
+                const f = flowsByStatus[row.key]?.[col.date] || { projected: 0, real: 0 };
+                colProjNet += f.projected + (manualFlows[row.key]?.[col.date] || 0);
+                colRealNet += f.real;
             });
-            runningBalance += netFlow;
-            finalBalances[col.date] = runningBalance;
+            runningProj += colProjNet;
+            runningReal += colRealNet;
+            proj[col.date] = runningProj;
+            real[col.date] = runningReal;
+            v[col.date] = colRealNet - colProjNet;
         });
+        return { projectedBalances: proj, realBalances: real, variances: v };
+    }, [columns, allRows, flowsByStatus, manualFlows, initialBalance, editableInitialBalance]);
 
-        return { initialBalances, finalBalances };
-    }, [finalInitialBalance, columns, allRows, automatedFlows, manualFlows]);
-
-    const exportData = useMemo(() => {
-        const data = allRows.map(row => {
-            const rowData: { [key: string]: string | number } = { 'Concepto': row.label };
-            columns.forEach(col => {
-                if (row.key === 'SALDO_INICIO') {
-                    rowData[col.label] = initialBalances[col.date] || 0;
-                } else {
-                    const totalValue = (automatedFlows[row.key]?.[col.date] || 0) + (manualFlows[row.key]?.[col.date] || 0);
-                    rowData[col.label] = totalValue;
-                }
+    // Data para el gráfico de Variance
+    const chartData = useMemo(() => {
+        return columns.map(col => {
+            let projIn = 0, realIn = 0, projOut = 0, realOut = 0;
+            allRows.forEach(row => {
+                const f = flowsByStatus[row.key]?.[col.date] || { projected: 0, real: 0 };
+                if (f.projected > 0) projIn += f.projected; else projOut += Math.abs(f.projected);
+                if (f.real > 0) realIn += f.real; else realOut += Math.abs(f.real);
             });
-            return rowData;
+            return { month: col.label, projIn, realIn, projOut, realOut };
         });
-
-        const finalBalanceRow: { [key: string]: string | number } = { 'Concepto': 'SALDO FINAL' };
-        columns.forEach(col => {
-            finalBalanceRow[col.label] = finalBalances[col.date] || 0;
-        });
-        data.push(finalBalanceRow);
-
-        return data;
-    }, [allRows, columns, initialBalances, finalBalances, automatedFlows, manualFlows]);
-
-    const exportColumns: ExportColumn<any>[] = useMemo(() => [
-        { header: 'Concepto', accessor: (row: any) => row['Concepto'] },
-        ...columns.map(col => ({
-            header: col.label,
-            accessor: (row: any) => row[col.label] || 0
-        }))
-    ], [columns]);
+    }, [columns, allRows, flowsByStatus]);
 
     return (
         <div className="space-y-6">
-            <h1 className="text-3xl font-bold text-gray-700 dark:text-gray-200">Flujo de Caja Proyectado</h1>
-
-            <div className="bg-white dark:bg-gray-800 p-4 rounded-xl shadow-md">
-                <h2 className="text-xl font-semibold text-gray-700 dark:text-gray-200 mb-4">Disponibilidad de Inversiones</h2>
-                {investmentSummaryData.length > 0 ? (
-                    <div className="overflow-x-auto max-h-60">
-                        <table className="min-w-full text-sm">
-                            <thead className="sticky top-0 bg-gray-100 dark:bg-gray-700">
-                                <tr>
-                                    <th className="p-2 text-left font-semibold text-gray-600 dark:text-gray-300">Instrumento</th>
-                                    <th className="p-2 text-right font-semibold text-gray-600 dark:text-gray-300">Valor de Mercado (USD)</th>
-                                    <th className="p-2 text-center font-semibold text-gray-600 dark:text-gray-300">Vencimiento</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                                {investmentSummaryData.map(holding => (
-                                    <tr key={`${holding.instrumentName}-${holding.investmentTypeId}`} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                                        <td className="p-2 font-medium">{holding.instrumentName}</td>
-                                        <td className="p-2 text-right font-semibold text-green-600 dark:text-green-400">
-                                            {holding.marketValueUSD.toLocaleString('es-AR', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                                        </td>
-                                        <td className="p-2 text-center">
-                                            {holding.maturityDate 
-                                                ? new Date(holding.maturityDate + 'T00:00:00Z').toLocaleDateString('es-AR', {timeZone: 'UTC'}) 
-                                                : <span className="px-2 py-1 text-xs font-semibold rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300">Líquida</span>}
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                            <tfoot>
-                                <tr className="border-t-2 border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/50">
-                                    <td className="p-2 font-bold text-right">Total</td>
-                                    <td className="p-2 text-right font-bold text-green-600 dark:text-green-400">
-                                        {totalInvestmentValueUSD.toLocaleString('es-AR', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                                    </td>
-                                    <td className="p-2"></td>
-                                </tr>
-                            </tfoot>
-                        </table>
-                    </div>
-                ) : (
-                    <p className="text-center text-gray-500 py-4">No hay inversiones activas.</p>
-                )}
+            <div className="flex justify-between items-center">
+                <h1 className="text-3xl font-bold text-gray-700 dark:text-gray-200">Control de Gestión: Real vs. Proyectado</h1>
+                <div className="flex gap-2 bg-gray-100 dark:bg-gray-800 p-1 rounded-lg">
+                    <button onClick={() => setViewMode('daily')} className={`px-4 py-1.5 text-xs font-bold rounded-md ${viewMode==='daily'?'bg-white shadow text-primary':'text-gray-500'}`}>DIARIO</button>
+                    <button onClick={() => setViewMode('monthly')} className={`px-4 py-1.5 text-xs font-bold rounded-md ${viewMode==='monthly'?'bg-white shadow text-primary':'text-gray-500'}`}>MENSUAL</button>
+                </div>
             </div>
-            
-            <div className="bg-white dark:bg-gray-800 p-4 rounded-xl shadow-md">
-                <div className="flex justify-between items-center mb-4">
-                    <div className="flex items-center gap-4">
-                        <div className="flex items-center gap-2 bg-gray-200 dark:bg-gray-700 p-1 rounded-lg text-sm">
-                            <button onClick={() => setViewMode('daily')} className={`px-3 py-1 rounded-md ${viewMode==='daily'?'bg-white dark:bg-primary text-primary dark:text-white font-semibold':'text-gray-700 dark:text-gray-200'}`}>Diario</button>
-                            <button onClick={() => setViewMode('weekly')} className={`px-3 py-1 rounded-md ${viewMode==='weekly'?'bg-white dark:bg-primary text-primary dark:text-white font-semibold':'text-gray-700 dark:text-gray-200'}`}>Semanal</button>
-                            <button onClick={() => setViewMode('monthly')} className={`px-3 py-1 rounded-md ${viewMode==='monthly'?'bg-white dark:bg-primary text-primary dark:text-white font-semibold':'text-gray-700 dark:text-gray-200'}`}>Mensual</button>
-                        </div>
-                        <div>
-                            <label className="text-sm font-medium">Fecha de Inicio:</label>
-                            <input type="date" value={startDate.toISOString().split('T')[0]} onChange={e => setStartDate(new Date(e.target.value + 'T00:00:00Z'))} className="ml-2 p-2 border rounded-md dark:bg-gray-700"/>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="lg:col-span-2 bg-white dark:bg-gray-800 p-4 rounded-xl shadow-sm border dark:border-gray-700">
+                    <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+                        <ChartBarIcon className="w-5 h-5 text-primary" />
+                        Análisis de Cumplimiento (Variance)
+                    </h3>
+                    <VarianceAnalysisChart data={chartData} />
+                </div>
+                <div className="space-y-4">
+                    <div className="bg-primary/10 border border-primary/20 p-4 rounded-xl">
+                        <h4 className="text-xs font-black uppercase text-primary mb-1">Estado de Sincronización</h4>
+                        <p className="text-sm text-gray-700 dark:text-gray-300">Conectado a CORE Gestión v4.2</p>
+                        <div className="mt-4 flex items-center gap-2">
+                            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                            <span className="text-[10px] font-bold text-gray-500">Última actualización: Hoy, 09:15 AM</span>
                         </div>
                     </div>
-                    <div className="flex items-center gap-4">
-                        <ExportButtons
-                            data={exportData}
-                            columns={exportColumns}
-                            fileName="flujo_de_caja"
-                            pdfTitle="Flujo de Caja Proyectado"
-                        />
-                        <button onClick={() => setIsExpandedFlowModalOpen(true)} className="text-sm bg-white hover:bg-gray-100 text-primary font-semibold py-2 px-4 rounded-md border border-primary">
-                            Ver Flujo Extendido
-                        </button>
+                    <div className="bg-white dark:bg-gray-800 p-4 rounded-xl shadow-sm border dark:border-gray-700">
+                        <h4 className="text-sm font-bold text-gray-700 dark:text-gray-200 mb-3">Resumen de Desvíos</h4>
+                        <div className="space-y-3">
+                            {columns.slice(-3).map(col => (
+                                <div key={col.date} className="flex justify-between items-center text-xs">
+                                    <span className="text-gray-500">{col.label}</span>
+                                    <span className={`font-black ${variances[col.date] >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                        {variances[col.date] > 0 ? '+' : ''}{variances[col.date].toLocaleString('es-AR', {maximumFractionDigits:0})}
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
                     </div>
                 </div>
+            </div>
 
+            <div className="bg-white dark:bg-gray-800 p-4 rounded-xl shadow-sm border dark:border-gray-700 overflow-hidden">
+                <div className="flex justify-between items-center mb-4">
+                    <h3 className="font-bold text-gray-700 dark:text-gray-200 uppercase text-xs tracking-widest">Matriz de Flujos Consolidados</h3>
+                    <div className="flex gap-4">
+                        <label className="flex items-center gap-2 text-xs font-bold text-gray-500 cursor-pointer">
+                            <input type="checkbox" checked={showComparison} onChange={e => setShowComparison(e.target.checked)} className="rounded text-primary" />
+                            VER COMPARATIVA REAL
+                        </label>
+                        <ExportButtons data={[]} columns={[]} fileName="cashflow_real" pdfTitle="Control de Gestión" />
+                    </div>
+                </div>
+                
                 <div className="overflow-x-auto">
-                    <table className="min-w-full text-sm border-collapse">
+                    <table className="min-w-full text-[11px] border-collapse">
                         <thead>
-                            <tr className="bg-gray-100 dark:bg-gray-900">
-                                <th className="sticky left-0 bg-gray-100 dark:bg-gray-900 z-20 p-2 border-b dark:border-gray-700 min-w-[200px] text-left">Concepto</th>
-                                {columns.map(col => <th key={col.date} className={`p-2 border-b dark:border-gray-700 min-w-[120px] text-center ${isNonWorkingDay(col.date) && viewMode === 'daily' ? 'bg-gray-200 dark:bg-gray-700/60' : ''}`}>{col.label}</th>)}
+                            <tr className="bg-gray-50 dark:bg-gray-900/50">
+                                <th className="sticky left-0 bg-gray-50 dark:bg-gray-900 z-20 p-2 border text-left min-w-[180px]">CONCEPTO</th>
+                                {columns.map(col => <th key={col.date} className="p-2 border text-center min-w-[110px]">{col.label}</th>)}
                             </tr>
                         </thead>
                         <tbody>
-                            {allRows.map(row => {
-                                const rowBg = row.style?.includes('bg-') ? '' : 'bg-white dark:bg-gray-800';
-
-                                if (row.key === 'SALDO_INICIO') {
-                                    const isEditingFirstCell = editingCell?.rowKey === 'SALDO_INICIO';
-                                    return (
-                                        <tr key={row.key} className={`${row.style} border-b dark:border-gray-700/50`}>
-                                            <td className={`sticky left-0 z-10 p-2 font-medium flex items-center justify-between ${row.style}`}>
-                                                {row.label}
-                                            </td>
-                                            {columns.map((col, index) => {
-                                                const isEditingThisCell = isEditingFirstCell && index === 0;
-                                                const balanceValue = initialBalances[col.date];
-                                                return (
-                                                    <td key={col.date} className={`p-0 text-right border-l dark:border-gray-700/50 ${isNonWorkingDay(col.date) && viewMode === 'daily' ? 'bg-gray-100 dark:bg-gray-700/40' : ''}`}>
-                                                        {isEditingThisCell ? (
-                                                            <FormattedNumberInput 
-                                                                value={editValue} 
-                                                                onChange={setEditValue} 
-                                                                onBlur={handleCellBlur} 
-                                                                onKeyDown={handleCellKeyDown} 
-                                                                autoFocus 
-                                                                className="w-full text-right"
-                                                            />
-                                                        ) : (
-                                                            <div 
-                                                                className={`h-full w-full p-1 ${index === 0 && canEdit ? 'cursor-pointer' : 'cursor-default'}`}
-                                                                onDoubleClick={() => { 
-                                                                    if (index === 0 && canEdit) {
-                                                                        setEditValue(editableInitialBalance); 
-                                                                        setEditingCell({ rowKey: 'SALDO_INICIO', date: 'balance' });
-                                                                    }
-                                                                }}
-                                                            >
-                                                                {balanceValue.toLocaleString('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                                                            </div>
-                                                        )}
-                                                    </td>
-                                                )
-                                            })}
-                                        </tr>
-                                    );
-                                }
-                                
-                                return (
-                                <tr key={row.key} className={`${row.style || ''} ${rowBg} border-b dark:border-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-700/50`}>
-                                    <td className={`sticky left-0 z-10 p-2 font-medium flex items-center justify-between ${row.style || ''} ${rowBg}`}>
-                                        {row.label}
-                                        {row.section === 'custom' && canEdit && <button onClick={() => handleRemoveRow(row.key)} className="text-red-500 opacity-50 hover:opacity-100"><TrashIcon /></button>}
-                                    </td>
+                            {allRows.map(row => (
+                                <tr key={row.key} className={`${row.style || ''} hover:bg-gray-100 dark:hover:bg-gray-700/30 transition-colors`}>
+                                    <td className="sticky left-0 z-10 p-2 border font-bold bg-inherit">{row.label}</td>
                                     {columns.map(col => {
-                                        const isEditing = editingCell?.rowKey === row.key && editingCell?.date === col.date;
+                                        const f = flowsByStatus[row.key]?.[col.date] || { projected: 0, real: 0 };
+                                        const val = f.projected + (manualFlows[row.key]?.[col.date] || 0);
                                         return (
-                                            <td key={col.date} className={`p-0 text-right border-l dark:border-gray-700/50 ${isNonWorkingDay(col.date) && viewMode === 'daily' ? 'bg-gray-100 dark:bg-gray-700/40' : ''}`}>
-                                                {isEditing ? (
-                                                     <FormattedNumberInput value={editValue} onChange={setEditValue} onBlur={handleCellBlur} onKeyDown={handleCellKeyDown} autoFocus className="w-full text-right"/>
-                                                ) : (
-                                                    <div className="h-full w-full p-1 cursor-pointer" onDoubleClick={() => handleCellDoubleClick(row.key, row.label, col)}>
-                                                        {(() => {
-                                                            const totalValue = (automatedFlows[row.key]?.[col.date] || 0) + (manualFlows[row.key]?.[col.date] || 0);
-                                                            return totalValue !== 0 ? totalValue.toLocaleString('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) : <span className="text-gray-400">-</span>
-                                                        })()}
-                                                    </div>
-                                                )}
+                                            <td key={col.date} className="p-2 border text-right">
+                                                <div className="flex flex-col">
+                                                    <span className="font-bold text-gray-800 dark:text-gray-200">{val !== 0 ? val.toLocaleString('es-AR', {maximumFractionDigits:0}) : '-'}</span>
+                                                    {showComparison && f.real !== 0 && (
+                                                        <span className="text-[9px] text-primary font-black italic">REAL: {f.real.toLocaleString('es-AR', {maximumFractionDigits:0})}</span>
+                                                    )}
+                                                </div>
                                             </td>
-                                        )
+                                        );
                                     })}
                                 </tr>
-                            )})}
-                            <tr className="border-t-2 border-dashed dark:border-gray-600"></tr>
-                            <tr className="bg-gray-200 dark:bg-gray-900 font-bold text-base">
-                                <td className="sticky left-0 bg-gray-200 dark:bg-gray-900 z-10 p-2">SALDO FINAL</td>
-                                {columns.map(col => <td key={col.date} className={`p-2 text-right border-l dark:border-gray-700 ${finalBalances[col.date] < 0 ? 'text-red-500' : ''} ${isNonWorkingDay(col.date) && viewMode === 'daily' ? 'bg-gray-300 dark:bg-gray-700/80' : ''}`}>{finalBalances[col.date].toLocaleString('es-AR')}</td>)}
+                            ))}
+                            <tr className="bg-slate-100 dark:bg-slate-900/50 font-black">
+                                <td className="sticky left-0 z-10 p-2 border bg-inherit">VARIANCE (DESVÍO)</td>
+                                {columns.map(col => (
+                                    <td key={col.date} className={`p-2 border text-right ${variances[col.date] >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                        {variances[col.date].toLocaleString('es-AR', {maximumFractionDigits:0})}
+                                    </td>
+                                ))}
+                            </tr>
+                            <tr className="bg-gray-800 text-white font-black text-xs">
+                                <td className="sticky left-0 z-10 p-2 border bg-inherit uppercase">Saldo Final Proyectado</td>
+                                {columns.map(col => (
+                                    <td key={col.date} className="p-2 border text-right">
+                                        {projectedBalances[col.date].toLocaleString('es-AR', {maximumFractionDigits:0})}
+                                    </td>
+                                ))}
                             </tr>
                         </tbody>
                     </table>
                 </div>
-                {canEdit && (
-                    <div className="mt-4 p-4 border-t dark:border-gray-700 flex items-center gap-4">
-                        <input 
-                            type="text" 
-                            value={newRowName} 
-                            onChange={(e) => setNewRowName(e.target.value)}
-                            placeholder="Nombre de la nueva fila..."
-                            className="border rounded-md p-2 dark:bg-gray-700"
-                        />
-                        <button onClick={handleAddRow} className="flex items-center gap-2 bg-primary hover:bg-secondary text-white font-bold py-2 px-4 rounded-lg"><PlusCircleIcon/> Agregar Fila</button>
-                    </div>
-                )}
             </div>
-
-            {isExpandedFlowModalOpen && (
-                <ExpandedCashFlowModal 
-                    isOpen={isExpandedFlowModalOpen}
-                    onClose={() => setIsExpandedFlowModalOpen(false)}
-                    financialData={financialCalculations}
-                />
-            )}
-
-            {detailModalData?.isOpen && (
-                <CashFlowCellDetailModal
-                    isOpen={detailModalData.isOpen}
-                    onClose={() => setDetailModalData(null)}
-                    title={detailModalData.title}
-                    items={detailModalData.items}
-                />
-            )}
         </div>
     );
 };

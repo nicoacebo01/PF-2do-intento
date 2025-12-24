@@ -1,3 +1,4 @@
+
 import React, { useMemo, useState, useCallback } from 'react';
 import type { Debt, Bank, MultiSelectOption, Currency } from '../types';
 import { Currency as CurrencyEnum } from '../types';
@@ -6,7 +7,7 @@ import DebtByCounterpartyDashboard from './DebtByCounterpartyDashboard';
 import DebtByTypeDashboard from './DebtByTypeDashboard';
 import DebtByCurrencyDashboard from './DebtByCurrencyDashboard';
 import SummaryDashboard from './SummaryDashboard';
-import { PlusCircleIcon, PresentationChartBarIcon, ClockIcon, ChartBarIcon, XCircleIcon, FilterIcon, ArrowUturnLeftIcon, ChevronDownIcon, ChevronUpIcon, SparklesIcon, DocumentMagnifyingGlassIcon } from './Icons';
+import { PlusCircleIcon, PresentationChartBarIcon, ClockIcon, ChartBarIcon, XCircleIcon, FilterIcon, ArrowUturnLeftIcon, ChevronDownIcon, ChevronUpIcon, SparklesIcon, DocumentMagnifyingGlassIcon, BoltIcon } from './Icons';
 import ExpiredDebtsModal from './ExpiredDebtsModal';
 import { useAppContext } from '../App';
 import { useFinancialCalculations } from '../utils/calculations';
@@ -22,6 +23,7 @@ import AccruedInterestAnalysisModal from './AccruedInterestAnalysisModal';
 import ExportButtons from './ExportButtons';
 import type { ExportColumn } from '../utils/export';
 import { formatPercentageForDisplay } from '../utils/formatting';
+import DebtOptimizerModal from './DebtOptimizerModal';
 
 
 type BreakdownTab = 'banks' | 'type' | 'currency';
@@ -48,6 +50,7 @@ const Dashboard: React.FC = () => {
   const [isCreditUtilizationModalOpen, setIsCreditUtilizationModalOpen] = useState(false);
   const [isDebtEvolutionModalOpen, setIsDebtEvolutionModalOpen] = useState(false);
   const [isAccruedInterestModalOpen, setIsAccruedInterestModalOpen] = useState(false);
+  const [isOptimizerOpen, setIsOptimizerOpen] = useState(false);
   
   const { activeDebts, expiredDebts } = useMemo(() => selectActiveAndExpiredDebts(companyDebts), [companyDebts]);
 
@@ -276,8 +279,15 @@ const Dashboard: React.FC = () => {
                         </div>
                     )}
                 </div>
-              <div className="flex items-center gap-4">
-                <button onClick={() => setIsAiAssistantOpen(true)} className="flex items-center gap-2 bg-indigo-500 hover:bg-indigo-600 text-white font-semibold py-2 px-4 rounded-md transition-colors" title="Consultar com IA">
+              <div className="flex items-center gap-3">
+                <button 
+                    onClick={() => setIsOptimizerOpen(true)}
+                    className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transition-all animate-pulse-slow"
+                >
+                    <BoltIcon className="w-5 h-5" />
+                    <span className="hidden sm:inline">OPTIMIZAR DEUDA</span>
+                </button>
+                <button onClick={() => setIsAiAssistantOpen(true)} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-2 px-4 rounded-md transition-colors" title="Consultar com IA">
                     <SparklesIcon/> <span className="hidden sm:inline">Consultar com IA</span>
                 </button>
                 <ExportButtons
@@ -337,11 +347,24 @@ const Dashboard: React.FC = () => {
               appSettings={appSettings}
           />
       )}
+      
+      {isOptimizerOpen && (
+          <DebtOptimizerModal
+              isOpen={isOptimizerOpen}
+              onClose={() => setIsOptimizerOpen(false)}
+              activeDebts={activeDebts}
+              banks={banks}
+              debtTypes={debtTypes}
+              appSettings={appSettings}
+          />
+      )}
 
 
        <style>{`
           @keyframes fade-in { 0% { opacity: 0; } 100% { opacity: 1; } }
           .animate-fade-in { animation: fade-in 0.3s ease-out forwards; }
+          @keyframes pulse-slow { 0%, 100% { opacity: 1; } 50% { opacity: 0.8; } }
+          .animate-pulse-slow { animation: pulse-slow 3s infinite ease-in-out; }
       `}</style>
     </div>
   );

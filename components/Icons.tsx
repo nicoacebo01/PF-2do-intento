@@ -1,3 +1,4 @@
+
 import React from 'react';
 
 export const PlusCircleIcon: React.FC = () => (
@@ -222,5 +223,18 @@ export const InformationCircleIcon: React.FC<{ className?: string }> = ({ classN
 export const DocumentMagnifyingGlassIcon: React.FC = () => (
     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
       <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m5.231 13.5h-8.021a1.125 1.125 0 01-1.125-1.125v-6.625a1.125 1.125 0 011.125-1.125h16.5a1.125 1.125 0 011.125 1.125v6.625a1.125 1.125 0 01-1.125 1.125h-1.521m-9.479-1.583a3.375 3.375 0 10-4.242 0M19.5 18.75l-2.25-2.25" />
+    </svg>
+);
+
+export const PrinterIcon: React.FC<{ className?: string }> = ({ className = "w-6 h-6" }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M6.72 6.72a.75.75 0 011.06 0L12 10.94l4.22-4.22a.75.75 0 111.06 1.06L13.06 12l4.22 4.22a.75.75 0 11-1.06 1.06L12 13.06l-4.22 4.22a.75.75 0 01-1.06-1.06L10.94 12 6.72 7.78a.75.75 0 010-1.06z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25h10.5V3H6.75zM19.5 7.5a.75.75 0 01.75.75v6.75a.75.75 0 01-.75.75h-1.5v3H6v-3H4.5a.75.75 0 01-.75-.75V8.25a.75.75 0 01.75-.75h15zM16.5 13.5v5.25H7.5V13.5h9zM16.5 9h1.5v1.5h-1.5V9z" />
+    </svg>
+);
+
+export const BoltIcon: React.FC<{ className?: string }> = ({ className = "w-6 h-6" }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
     </svg>
 );
